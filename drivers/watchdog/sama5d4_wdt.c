@@ -15,6 +15,7 @@
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
 #include <linux/watchdog.h>
+#include <linux/delay.h>
 
 #include "at91sam9_wdt.h"
 
@@ -55,9 +56,18 @@ static int sama5d4_wdt_start(struct watchdog_device *wdd)
 	struct sama5d4_wdt *wdt = watchdog_get_drvdata(wdd);
 	u32 reg;
 
+	//dev_info(wdd->dev, "%s\n", __func__);
+
+	// AP wait 3 clock cycles @32768/128 Hz (0,01171875 s) to ensure no AT91_WDT_CR write have been done before
+	// use usleep_range as suggested by https://www.kernel.org/doc/Documentation/timers/timers-howto.txt
+	usleep_range(11720, 12000);
+
+
 	reg = wdt_read(wdt, AT91_WDT_MR);
 	reg &= ~AT91_WDT_WDDIS;
 	wdt_write(wdt, AT91_WDT_MR, reg);
+
+	//dev_info(wdd->dev, "%s complete\n", __func__);
 
 	return 0;
 }
@@ -67,9 +77,18 @@ static int sama5d4_wdt_stop(struct watchdog_device *wdd)
 	struct sama5d4_wdt *wdt = watchdog_get_drvdata(wdd);
 	u32 reg;
 
+	//dev_info(wdd->dev, "%s\n", __func__);
+
+	// AP wait 3 clock cycles @32768/128 Hz (0,01171875 s) to ensure no AT91_WDT_CR write have been done before
+	// use usleep_range as suggested by https://www.kernel.org/doc/Documentation/timers/timers-howto.txt
+	usleep_range(11720, 12000);
+
+
 	reg = wdt_read(wdt, AT91_WDT_MR);
 	reg |= AT91_WDT_WDDIS;
 	wdt_write(wdt, AT91_WDT_MR, reg);
+
+	//dev_info(wdd->dev, "%s complete\n", __func__);
 
 	return 0;
 }
@@ -90,6 +109,12 @@ static int sama5d4_wdt_set_timeout(struct watchdog_device *wdd,
 	u32 value = WDT_SEC2TICKS(timeout);
 	u32 reg;
 
+	//dev_info(wdd->dev, "%s %d\n", __func__, timeout);
+
+	// AP wait 3 clock cycles @32768/128 Hz (0,01171875 s) to ensure no AT91_WDT_CR write have been done before
+	// use usleep_range as suggested by https://www.kernel.org/doc/Documentation/timers/timers-howto.txt
+	usleep_range(11720, 12000);
+
 	reg = wdt_read(wdt, AT91_WDT_MR);
 	reg &= ~AT91_WDT_WDV;
 	reg &= ~AT91_WDT_WDD;
@@ -98,6 +123,8 @@ static int sama5d4_wdt_set_timeout(struct watchdog_device *wdd,
 	wdt_write(wdt, AT91_WDT_MR, reg);
 
 	wdd->timeout = timeout;
+
+	//dev_info(wdd->dev, "%s complete\n", __func__);
 
 	return 0;
 }

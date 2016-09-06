@@ -55,6 +55,8 @@ struct flash_info {
 #define	SPI_NOR_DUAL_READ	0x20    /* Flash supports Dual Read */
 #define	SPI_NOR_QUAD_READ	0x40    /* Flash supports Quad Read */
 #define	USE_FSR			0x80	/* use flag status register */
+#define FORCE_4B_COMMAND_SET	0x0100	/* force use of native 4b command set for Flashes bigger than 16 Mib, as driver already does for AMD Flashes */
+#define PROMISCUOUS_4B_MODE	0x0200	/* uses native 4b read command but standard 2b program/erase commands (switching on/off 4b mode on demand) set for Flashes bigger than 16 Mib */
 };
 
 #define JEDEC_MFR(info)	((info)->id[0])
@@ -229,6 +231,9 @@ static void spi_nor_set_4byte_opcodes(struct spi_nor *nor,
 	nor->erase_opcode	= spi_nor_3to4_opcode(nor->erase_opcode);
 }
 
+/* formward declaration */
+static int spi_nor_wait_till_ready(struct spi_nor *nor);
+
 /* Enable/disable 4-byte addressing mode. */
 static inline int set_4byte(struct spi_nor *nor, struct flash_info *info,
 			    int enable)
@@ -236,6 +241,8 @@ static inline int set_4byte(struct spi_nor *nor, struct flash_info *info,
 	int status;
 	bool need_wren = false;
 	u8 cmd;
+
+	spi_nor_wait_till_ready(nor);
 
 	switch (JEDEC_MFR(info)) {
 	case CFI_MFR_ST: /* Micron, actually */
@@ -250,13 +257,16 @@ static inline int set_4byte(struct spi_nor *nor, struct flash_info *info,
 		status = nor->write_reg(nor, cmd, NULL, 0, 0);
 		if (need_wren)
 			write_disable(nor);
-
-		return status;
+		break;
 	default:
 		/* Spansion style */
 		nor->cmd_buf[0] = enable << 7;
-		return nor->write_reg(nor, SPINOR_OP_BRWR, nor->cmd_buf, 1, 0);
+		status =  nor->write_reg(nor, SPINOR_OP_BRWR, nor->cmd_buf, 1, 0);
+		break;
 	}
+
+	dev_dbg(nor->dev, "%s enable=%d status=%d flagsr=0x%08x\n", __func__, enable, status, read_fsr(nor));
+	return status;
 }
 static inline int spi_nor_sr_ready(struct spi_nor *nor)
 {
@@ -398,6 +408,9 @@ static int spi_nor_erase(struct mtd_info *mtd, struct erase_info *instr)
 
 	/* "sector"-at-a-time erase */
 	} else {
+		if(nor->promiscuous)
+			set_4byte(nor, nor->info, 1);
+
 		while (len) {
 			write_enable(nor);
 
@@ -413,6 +426,9 @@ static int spi_nor_erase(struct mtd_info *mtd, struct erase_info *instr)
 			if (ret)
 				goto erase_err;
 		}
+
+		if(nor->promiscuous)
+			set_4byte(nor, nor->info, 0);
 	}
 
 	write_disable(nor);
@@ -425,6 +441,10 @@ static int spi_nor_erase(struct mtd_info *mtd, struct erase_info *instr)
 	return ret;
 
 erase_err:
+
+	if(nor->promiscuous)
+		set_4byte(nor, nor->info, 0);
+
 	spi_nor_unlock_and_unprep(nor, SPI_NOR_OPS_ERASE);
 	instr->state = MTD_ERASE_FAILED;
 	return ret;
@@ -632,7 +652,7 @@ static const struct spi_device_id spi_nor_ids[] = {
 	{ "mx25u6435f",  INFO(0xc22537, 0, 64 * 1024, 128, SECT_4K) },
 	{ "mx25l12805d", INFO(0xc22018, 0, 64 * 1024, 256, 0) },
 	{ "mx25l12855e", INFO(0xc22618, 0, 64 * 1024, 256, 0) },
-	{ "mx25l25635e", INFO(0xc22019, 0, 64 * 1024, 512, SPI_NOR_QUAD_READ) },
+ 	{ "mx25l25635f", INFO(0xc22019, 0, 64 * 1024, 512, SECT_4K | SPI_NOR_QUAD_READ | FORCE_4B_COMMAND_SET) },
 	{ "mx25l25655e", INFO(0xc22619, 0, 64 * 1024, 512, 0) },
 	{ "mx66l51235l", INFO(0xc2201a, 0, 64 * 1024, 1024, SPI_NOR_QUAD_READ) },
 	{ "mx66l1g55g",  INFO(0xc2261b, 0, 64 * 1024, 2048, SPI_NOR_QUAD_READ) },
@@ -642,7 +662,7 @@ static const struct spi_device_id spi_nor_ids[] = {
 	{ "n25q064",     INFO(0x20ba17, 0, 64 * 1024,  128, SPI_NOR_QUAD_READ) },
 	{ "n25q128a11",  INFO(0x20bb18, 0, 64 * 1024,  256, SPI_NOR_QUAD_READ) },
 	{ "n25q128a13",  INFO(0x20ba18, 0, 64 * 1024,  256, SPI_NOR_QUAD_READ) },
-	{ "n25q256a",    INFO(0x20ba19, 0, 64 * 1024,  512, SECT_4K | SPI_NOR_QUAD_READ) },
+	{ "n25q256a",    INFO(0x20ba19, 0, 64 * 1024,  512, SECT_4K | SPI_NOR_QUAD_READ | PROMISCUOUS_4B_MODE) },
 	{ "n25q512a",    INFO(0x20bb20, 0, 64 * 1024, 1024, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ) },
 	{ "n25q512ax3",  INFO(0x20ba20, 0, 64 * 1024, 1024, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ) },
 	{ "n25q00",      INFO(0x20ba21, 0, 64 * 1024, 2048, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ) },
@@ -911,6 +931,9 @@ static int spi_nor_write(struct mtd_info *mtd, loff_t to, size_t len,
 	if (ret)
 		return ret;
 
+	if(nor->promiscuous)
+		set_4byte(nor, nor->info, 1);
+
 	write_enable(nor);
 
 	page_offset = to & (nor->page_size - 1);
@@ -940,7 +963,12 @@ static int spi_nor_write(struct mtd_info *mtd, loff_t to, size_t len,
 	}
 
 	ret = spi_nor_wait_till_ready(nor);
+
 write_err:
+
+	if(nor->promiscuous)
+		set_4byte(nor, nor->info, 0);
+
 	spi_nor_unlock_and_unprep(nor, SPI_NOR_OPS_WRITE);
 	return ret;
 }
@@ -1732,6 +1760,9 @@ int spi_nor_scan(struct spi_nor *nor, const char *name, enum read_mode mode)
 		}
 	}
 
+	// save jedec ID into spi_nor struct
+	nor->info =  info;
+
 	mutex_init(&nor->lock);
 
 	/*
@@ -1857,10 +1888,27 @@ int spi_nor_scan(struct spi_nor *nor, const char *name, enum read_mode mode)
 		/* enable 4-byte addressing if the device exceeds 16MiB */
 		nor->addr_width = 4;
 		if (JEDEC_MFR(info) == CFI_MFR_AMD ||
-		    (np && of_property_read_bool(np, "spi-nor-4byte-opcodes")))
-			spi_nor_set_4byte_opcodes(nor, info);
-		else
-			set_4byte(nor, info, 1);
+		    (np && of_property_read_bool(np, "spi-nor-4byte-opcodes")) ||
+		    (info->flags & FORCE_4B_COMMAND_SET)) {
+  			/* ... by using dedicated 4-byte command set */
+  			dev_info(dev, "Using dedicated 4-byte command set\n");
+			spi_nor_set_4byte_opcodes(nor, info);		
+		} else {
+  			if (info->flags & PROMISCUOUS_4B_MODE) {
+  				/* ... by using dedicated 3-byte/4-byte promiscuous mode */
+  				dev_info(dev, "Using promiscuous 3-byte/4-byte mode\n");
+  				// set the 4 byte mode only during erase or reprogram, so no need to do it now
+  				nor->promiscuous = true;
+  				// also override the read_opcode to use th native 4b mode
+				nor->read_opcode = spi_nor_3to4_opcode(nor->read_opcode);
+  			}
+  			else {
+  				/* ... by using dedicated 3-byte command set extended to 4 byte addresses */
+  				dev_info(dev, "Using native 3-byte command set extending the address range\n");
+  				// set the 4 byte mode for ever
+  				set_4byte(nor, nor->info, 1);
+  			}
+		}
 	} else {
 		nor->addr_width = 3;
 	}

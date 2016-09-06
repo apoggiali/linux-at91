@@ -165,6 +165,8 @@ struct spi_nor {
 	struct device		*dev;
 	u32			page_size;
 	u8			addr_width;
+	bool			promiscuous;
+	void			*info;
 	u8			erase_opcode;
 	u8			read_opcode;
 	u8			read_dummy;

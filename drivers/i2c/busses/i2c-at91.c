@@ -142,6 +142,8 @@ struct at91_twi_dev {
 	bool recv_len_abort;
 	u32 fifo_size;
 	struct at91_twi_dma dma;
+	//! Tell if current transaction uses or not the alternate command functions. Require HW capability.
+	bool use_alt_cmd;
 };
 
 static unsigned at91_twi_read(struct at91_twi_dev *dev, unsigned reg)
@@ -244,7 +246,7 @@ static void at91_twi_write_next_byte(struct at91_twi_dev *dev)
 
 	/* send stop when last byte has been written */
 	if (--dev->buf_len == 0)
-		if (!dev->pdata->has_alt_cmd)
+		if (!dev->use_alt_cmd)
 			at91_twi_write(dev, AT91_TWI_CR, AT91_TWI_STOP);
 
 	dev_dbg(dev->dev, "wrote 0x%x, to go %d\n", *dev->buf, dev->buf_len);
@@ -267,7 +269,7 @@ static void at91_twi_write_data_dma_callback(void *data)
 	 * we just have to enable TXCOMP one.
 	 */
 	at91_twi_write(dev, AT91_TWI_IER, AT91_TWI_TXCOMP);
-	if (!dev->pdata->has_alt_cmd)
+	if (!dev->use_alt_cmd)
 		at91_twi_write(dev, AT91_TWI_CR, AT91_TWI_STOP);
 }
 
@@ -385,7 +387,7 @@ static void at91_twi_read_next_byte(struct at91_twi_dev *dev)
 	}
 
 	/* send stop if second but last byte has been read */
-	if (!dev->pdata->has_alt_cmd && dev->buf_len == 1)
+	if (!dev->use_alt_cmd && dev->buf_len == 1)
 		at91_twi_write(dev, AT91_TWI_CR, AT91_TWI_STOP);
 
 	dev_dbg(dev->dev, "read 0x%x, to go %d\n", *dev->buf, dev->buf_len);
@@ -401,7 +403,7 @@ static void at91_twi_read_data_dma_callback(void *data)
 	dma_unmap_single(dev->dev, sg_dma_address(&dev->dma.sg[0]),
 			 dev->buf_len, DMA_FROM_DEVICE);
 
-	if (!dev->pdata->has_alt_cmd) {
+	if (!dev->use_alt_cmd) {
 		/* The last two bytes have to be read without using dma */
 		dev->buf += dev->buf_len - 2;
 		dev->buf_len = 2;
@@ -418,7 +420,7 @@ static void at91_twi_read_data_dma(struct at91_twi_dev *dev)
 	struct dma_chan *chan_rx = dma->chan_rx;
 	size_t buf_len;
 
-	buf_len = (dev->pdata->has_alt_cmd) ? dev->buf_len : dev->buf_len - 2;
+	buf_len = (dev->use_alt_cmd) ? dev->buf_len : dev->buf_len - 2;
 	dma->direction = DMA_FROM_DEVICE;
 
 	/* Keep in mind that we won't use dma to read the last two bytes */
@@ -550,7 +552,7 @@ static int at91_do_twi_transfer(struct at91_twi_dev *dev)
 	int ret;
 	unsigned long time_left;
 	bool has_unre_flag = dev->pdata->has_unre_flag;
-	bool has_alt_cmd = dev->pdata->has_alt_cmd;
+	bool use_alt_cmd = dev->use_alt_cmd;
 	unsigned sr;
 
 	/*
@@ -627,7 +629,7 @@ static int at91_do_twi_transfer(struct at91_twi_dev *dev)
 		unsigned start_flags = AT91_TWI_START;
 
 		/* if only one byte is to be read, immediately stop transfer */
-		if (!has_alt_cmd && dev->buf_len <= 1 &&
+		if (!use_alt_cmd && dev->buf_len <= 1 &&
 		    !(dev->msg->flags & I2C_M_RECV_LEN))
 			start_flags |= AT91_TWI_STOP;
 		at91_twi_write(dev, AT91_TWI_CR, start_flags);
@@ -686,7 +688,7 @@ static int at91_do_twi_transfer(struct at91_twi_dev *dev)
 		ret = -EIO;
 		goto error;
 	}
-	if ((has_alt_cmd || dev->fifo_size) &&
+	if ((use_alt_cmd || dev->fifo_size) &&
 	    (dev->transfer_status & AT91_TWI_LOCK)) {
 		dev_err(dev->dev, "tx locked\n");
 		ret = -EIO;
@@ -706,7 +708,7 @@ error:
 	/* first stop DMA transfer if still in progress */
 	at91_twi_dma_cleanup(dev);
 	/* then flush THR/FIFO and unlock TX if locked */
-	if ((has_alt_cmd || dev->fifo_size) &&
+	if ((use_alt_cmd || dev->fifo_size) &&
 	    (dev->transfer_status & AT91_TWI_LOCK)) {
 		dev_dbg(dev->dev, "unlock tx\n");
 		at91_twi_write(dev, AT91_TWI_CR,
@@ -721,7 +723,7 @@ static int at91_twi_xfer(struct i2c_adapter *adap, struct i2c_msg *msg, int num)
 	int ret;
 	unsigned int_addr_flag = 0;
 	struct i2c_msg *m_start = msg;
-	bool is_read, use_alt_cmd = false;
+	bool is_read;
 
 	dev_dbg(&adap->dev, "at91_xfer: processing %d messages:\n", num);
 
@@ -746,21 +748,23 @@ static int at91_twi_xfer(struct i2c_adapter *adap, struct i2c_msg *msg, int num)
 
 	is_read = (m_start->flags & I2C_M_RD);
 	if (dev->pdata->has_alt_cmd) {
-		if (m_start->len > 0) {
+		if (m_start->len > 0 && (m_start->len <= 0xFF)) {
 			at91_twi_write(dev, AT91_TWI_CR, AT91_TWI_ACMEN);
 			at91_twi_write(dev, AT91_TWI_ACR,
 				       AT91_TWI_ACR_DATAL(m_start->len) |
 				       ((is_read) ? AT91_TWI_ACR_DIR : 0));
-			use_alt_cmd = true;
+			dev->use_alt_cmd = true;
 		} else {
 			at91_twi_write(dev, AT91_TWI_CR, AT91_TWI_ACMDIS);
+			dev->use_alt_cmd = false;
 		}
-	}
+	} else
+		dev->use_alt_cmd = false;
 
 	at91_twi_write(dev, AT91_TWI_MMR,
 		       (m_start->addr << 16) |
 		       int_addr_flag |
-		       ((!use_alt_cmd && is_read) ? AT91_TWI_MREAD : 0));
+		       ((!dev->use_alt_cmd && is_read) ? AT91_TWI_MREAD : 0));
 
 	dev->buf_len = m_start->len;
 	dev->buf = m_start->buf;
@@ -865,7 +869,9 @@ static struct at91_twi_pdata sama5d2_config = {
 	.clk_max_div = 7,
 	.clk_offset = 4,
 	.has_unre_flag = true,
-	.has_alt_cmd = true,
+	// SC, AP : The alternative mode introduces strange conditions: We saw successful transfer that didn't initialize return buffer.
+	// TODO: Fix alternative mode
+	.has_alt_cmd = false,//true,
 };
 
 static const struct of_device_id atmel_twi_dt_ids[] = {
@@ -1196,3 +1202,4 @@ MODULE_AUTHOR("Nikolaus Voss <n.voss@weinmann.de>");
 MODULE_DESCRIPTION("I2C (TWI) driver for Atmel AT91");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:at91_i2c");
+

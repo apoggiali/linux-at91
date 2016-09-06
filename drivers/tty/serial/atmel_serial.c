@@ -169,6 +169,13 @@ struct atmel_uart_port {
 	void (*schedule_tx)(struct uart_port *port);
 	void (*release_rx)(struct uart_port *port);
 	void (*release_tx)(struct uart_port *port);
+
+	// the pinctrl object associated to this device
+	struct pinctrl *p;
+	// the default pinctrl state
+	struct pinctrl_state *s_default;
+	// the pinctrl state to be used in rs485 mode
+	struct pinctrl_state *s_rs485;
 };
 
 static struct atmel_uart_port atmel_ports[ATMEL_MAX_UART];
@@ -338,6 +345,12 @@ static int atmel_config_rs485(struct uart_port *port,
 		atmel_uart_writel(port, ATMEL_US_TTGR,
 				  rs485conf->delay_rts_after_send);
 		mode |= ATMEL_US_USMODE_RS485;
+
+		// here we are, change the pin-mux to rs485 state
+		if (atmel_port->s_rs485 != NULL)
+			if (pinctrl_select_state(atmel_port->p, atmel_port->s_rs485) < 0)
+				dev_err(port->dev, "Unable to set the rs485 pinctrl state\n");
+
 	} else {
 		dev_dbg(port->dev, "Setting UART to RS232\n");
 		if (atmel_use_pdc_tx(port))
@@ -345,6 +358,11 @@ static int atmel_config_rs485(struct uart_port *port,
 				ATMEL_US_TXBUFE;
 		else
 			atmel_port->tx_done_mask = ATMEL_US_TXRDY;
+
+		// here we are, change the pin-mux back to default state, if a rs485 state has been found
+		if ((atmel_port->s_rs485 != NULL) && (atmel_port->s_default != NULL))
+			if (pinctrl_select_state(atmel_port->p, atmel_port->s_default) < 0)
+				dev_err(port->dev, "Unable to restore default pinctrl state\n");
 	}
 	atmel_uart_writel(port, ATMEL_US_MR, mode);
 
@@ -2418,6 +2436,31 @@ static int atmel_init_port(struct atmel_uart_port *atmel_port,
 		atmel_port->tx_done_mask = ATMEL_US_TXRDY;
 	}
 
+	atmel_port->p = devm_pinctrl_get(&pdev->dev);
+	if (IS_ERR(atmel_port->p))
+	{
+		dev_err(&pdev->dev, "Failed to get pinctrl");
+		atmel_port->p = NULL;
+		atmel_port->s_default = NULL;
+		atmel_port->s_rs485 = NULL;
+	}
+	else
+	{
+		atmel_port->s_default = pinctrl_lookup_state(atmel_port->p, "default");
+		if (IS_ERR(atmel_port->s_default))
+		{
+			dev_err(&pdev->dev, "Failed to get default configuration");
+			atmel_port->s_default = NULL;
+		}
+
+		atmel_port->s_rs485 = pinctrl_lookup_state(atmel_port->p, "rs485");
+		if (IS_ERR(atmel_port->s_rs485))
+		{
+			dev_err(&pdev->dev, "Failed to get rs485 configuration");
+			atmel_port->s_rs485 = NULL;
+		}
+	}
+	
 	return 0;
 }
 

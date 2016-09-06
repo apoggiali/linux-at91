@@ -106,7 +106,7 @@ static int atmel_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	unsigned long long div;
 	unsigned int pres = 0;
 	u32 val;
-	int ret;
+	int ret = 0;
 
 	if (test_bit(PWMF_ENABLED, &pwm->flags) && (period_ns != pwm->period)) {
 		dev_err(chip->dev, "cannot change PWM period while enabled\n");
@@ -133,11 +133,11 @@ static int atmel_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	do_div(div, period_ns);
 	dty = prd - div;
 
-	ret = clk_enable(atmel_pwm->clk);
-	if (ret) {
-		dev_err(chip->dev, "failed to enable PWM clock\n");
-		return ret;
-	}
+//	ret = clk_enable(atmel_pwm->clk);
+//	if (ret) {
+//		dev_err(chip->dev, "failed to enable PWM clock\n");
+//		return ret;
+//	}
 
 	/* It is necessary to preserve CPOL, inside CMR */
 	val = atmel_pwm_ch_readl(atmel_pwm, pwm->hwpwm, PWM_CMR);
@@ -145,7 +145,8 @@ static int atmel_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	atmel_pwm_ch_writel(atmel_pwm, pwm->hwpwm, PWM_CMR, val);
 	atmel_pwm->config(chip, pwm, dty, prd);
 
-	clk_disable(atmel_pwm->clk);
+//	AP Do no need to disable clock! This prevent the pwm peripheral to work correctly!
+//	clk_disable(atmel_pwm->clk);
 	return ret;
 }
 
@@ -201,7 +202,7 @@ static int atmel_pwm_set_polarity(struct pwm_chip *chip, struct pwm_device *pwm,
 {
 	struct atmel_pwm_chip *atmel_pwm = to_atmel_pwm_chip(chip);
 	u32 val;
-	int ret;
+//	int ret;
 
 	val = atmel_pwm_ch_readl(atmel_pwm, pwm->hwpwm, PWM_CMR);
 
@@ -210,15 +211,17 @@ static int atmel_pwm_set_polarity(struct pwm_chip *chip, struct pwm_device *pwm,
 	else
 		val |= PWM_CMR_CPOL;
 
-	ret = clk_enable(atmel_pwm->clk);
-	if (ret) {
-		dev_err(chip->dev, "failed to enable PWM clock\n");
-		return ret;
-	}
+//	AP Clock is already enabled by atmel_pwm_config
+//	ret = clk_enable(atmel_pwm->clk);
+//	if (ret) {
+//		dev_err(chip->dev, "failed to enable PWM clock\n");
+//		return ret;
+//	}
 
 	atmel_pwm_ch_writel(atmel_pwm, pwm->hwpwm, PWM_CMR, val);
 
-	clk_disable(atmel_pwm->clk);
+//	AP Do no need to disable clock! This prevent the pwm peripheral to work correctly!
+//	clk_disable(atmel_pwm->clk);
 
 	return 0;
 }
@@ -226,13 +229,14 @@ static int atmel_pwm_set_polarity(struct pwm_chip *chip, struct pwm_device *pwm,
 static int atmel_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 {
 	struct atmel_pwm_chip *atmel_pwm = to_atmel_pwm_chip(chip);
-	int ret;
+//	int ret;
 
-	ret = clk_enable(atmel_pwm->clk);
-	if (ret) {
-		dev_err(chip->dev, "failed to enable PWM clock\n");
-		return ret;
-	}
+//	AP Clock is already enabled by atmel_pwm_config
+//	ret = clk_enable(atmel_pwm->clk);
+//	if (ret) {
+//		dev_err(chip->dev, "failed to enable PWM clock\n");
+//		return ret;
+//	}
 
 	atmel_pwm_writel(atmel_pwm, PWM_ENA, 1 << pwm->hwpwm);
 
@@ -245,7 +249,8 @@ static void atmel_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
 
 	atmel_pwm_writel(atmel_pwm, PWM_DIS, 1 << pwm->hwpwm);
 
-	clk_disable(atmel_pwm->clk);
+//	AP Do no need to disable clock! This prevent the pwm peripheral to work correctly!
+//	clk_disable(atmel_pwm->clk);
 }
 
 static const struct pwm_ops atmel_pwm_ops = {
@@ -320,6 +325,12 @@ static int atmel_pwm_probe(struct platform_device *pdev)
 	const struct atmel_pwm_data *data;
 	struct atmel_pwm_chip *atmel_pwm;
 	struct resource *res;
+	// the pwm_device in device tree pwms node
+	struct pwm_device *tmp;
+	// the pinctrl object associated to this device
+	struct pinctrl *p;
+	// the enabled pinctrl state
+	struct pinctrl_state *s_enabled;
 	int ret;
 
 	data = atmel_pwm_get_driver_data(pdev);
@@ -345,6 +356,13 @@ static int atmel_pwm_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	// AP enable clock
+	ret = clk_enable(atmel_pwm->clk);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to enable PWM clock\n");
+		goto unprepare_clk;
+	}
+
 	atmel_pwm->chip.dev = &pdev->dev;
 	atmel_pwm->chip.ops = &atmel_pwm_ops;
 
@@ -366,6 +384,30 @@ static int atmel_pwm_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, atmel_pwm);
 
+	// finally check if any "pwms" node have been in the dtb to setup polarity and period
+	// pwm_get inspects the device tree (of this device) to look after pwms node and applies the given configuration
+	tmp = pwm_get(&pdev->dev, NULL);
+	if (!IS_ERR(tmp))
+	{
+		dev_info(&pdev->dev, "Applying pwms settings\n");
+		// id pwm_get is successfull, then release the pwm for the user. It should regain configuration.
+		pwm_put(tmp);
+	}
+
+	// to avoid the "remaining" glitch, default pinmux configuration may be overridden by an "enabled" configuration
+	// this allow to keep the pwm line as GPIO until the setup (polarity) is correct
+	p = devm_pinctrl_get(&pdev->dev);
+	if (!IS_ERR(p))
+	{
+		s_enabled = pinctrl_lookup_state(p, "enabled");
+		if (!IS_ERR(s_enabled))
+		{
+			dev_info(&pdev->dev, "Setting pinctrl to \"enabled\" state\n");
+			if (pinctrl_select_state(p, s_enabled) < 0)
+				dev_err(&pdev->dev, "Unable to set the \"enabled\" state\n");
+		}
+	}
+		
 	return ret;
 
 unprepare_clk:
@@ -377,6 +419,9 @@ static int atmel_pwm_remove(struct platform_device *pdev)
 {
 	struct atmel_pwm_chip *atmel_pwm = platform_get_drvdata(pdev);
 
+	// AP
+	clk_disable(atmel_pwm->clk);
+	
 	clk_unprepare(atmel_pwm->clk);
 
 	return pwmchip_remove(&atmel_pwm->chip);

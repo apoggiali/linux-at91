@@ -199,6 +199,9 @@ config USB_F_HID
 config USB_F_PRINTER
 	tristate
 
+config USB_F_HID
+	tristate
+
 choice
 	tristate "USB Gadget Drivers"
 	default USB_ETH
@@ -450,6 +453,17 @@ config USB_CONFIGFS_F_PRINTER
 
 	  For more information, see Documentation/usb/gadget_printer.txt
 	  which includes sample code for accessing the device file.
+
+config USB_CONFIGFS_F_HID
+	boolean "HID function"
+	depends on USB_CONFIGFS
+	select USB_F_HID
+	help
+	  The HID function driver provides generic emulation of USB
+	  Human Interface Devices (HID).
+
+	  For more information, see Documentation/usb/gadget_hid.txt.
+
 
 source "drivers/usb/gadget/legacy/Kconfig"
 

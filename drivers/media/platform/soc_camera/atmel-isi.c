@@ -29,7 +29,7 @@
 #include <media/soc_camera.h>
 #include <media/soc_mediabus.h>
 #include <media/v4l2-of.h>
-#include <media/videobuf2-dma-contig.h>
+#include <media/videobuf2-dma-nc.h>
 
 #include "atmel-isi.h"
 #include "atmel-isc.h"
@@ -299,6 +299,7 @@ static irqreturn_t isi_interrupt(int irq, void *dev_id)
 	}
 
 	spin_unlock(&isi->lock);
+	
 	return ret;
 }
 
@@ -417,7 +418,7 @@ static int buffer_prepare(struct vb2_buffer *vb)
 			list_del_init(&desc->list);
 
 			/* Initialize the dma descriptor */
-			vb_addr = vb2_dma_contig_plane_dma_addr(vb, 0);
+			vb_addr = vb2_dma_nc_plane_dma_addr(vb, 0);
 			(*isi->hw_ops->init_dma_desc)(desc->p_fbd, vb_addr, 0);
 
 			buf->p_dma_desc = desc;
@@ -585,6 +586,11 @@ static void stop_streaming(struct vb2_queue *vq)
 	struct atmel_isi *isi = ici->priv;
 	struct frame_buffer *buf, *node;
 	int ret = 0;
+	struct v4l2_ctrl *ctrl;
+	int32_t val;
+	
+	struct v4l2_subdev *sd = soc_camera_to_subdev(icd);
+	struct v4l2_ctrl_handler *ctrl_handler = sd->ctrl_handler;
 
 	spin_lock_irq(&isi->lock);
 	isi->active = NULL;
@@ -598,11 +604,45 @@ static void stop_streaming(struct vb2_queue *vq)
 
 	(*isi->hw_ops->hw_uninitialize)(isi);
 
-	/* Disable ISI and wait for it is done */
-	ret = atmel_isi_wait_status(isi, WAIT_HW_DISABLE);
-	if (ret < 0)
-		dev_err(icd->parent, "Disable ISI timed out\n");
+	/* Disable ISI and (if we aren't in triggered mode) wait for it is done */
+	if (ctrl_handler==NULL) 
+	{
+		// we are in continuos mode: wait.
+		ret = atmel_isi_wait_status(isi, WAIT_HW_DISABLE);
+		if (ret < 0)
+			dev_err(icd->parent, "Disable ISI timed out\n");
+	}
+	else
+	{
+		ctrl = v4l2_ctrl_find(ctrl_handler, 0x00982900);
+	
+		if (ctrl==NULL)
+		{
+			// we are in continuos mode: wait.
+			ret = atmel_isi_wait_status(isi, WAIT_HW_DISABLE);
+			if (ret < 0)
+				dev_err(icd->parent, "Disable ISI timed out\n");
+		}	
+		else
+		{
+			val = (int32_t) v4l2_ctrl_g_ctrl(ctrl);
 
+			if (val==0)
+			{
+				// we are in continuos mode: wait.
+				ret = atmel_isi_wait_status(isi, WAIT_HW_DISABLE);
+				if (ret < 0)
+					dev_err(icd->parent, "Disable ISI timed out\n");
+			}
+			else
+			{
+				// we are in the triggered mode: don't wait!
+				// dev_err(icd->parent, "Triggered mode: don't wait!\n");
+				;
+			}
+		}
+	}
+	
 	pm_runtime_put(ici->v4l2_dev.dev);
 }
 
@@ -748,7 +788,7 @@ static irqreturn_t isc_interrupt(int irq, void *dev_id)
 	status = isi_readl(isc, ISC_INTSR);
 	mask = isi_readl(isc, ISC_INTMASK);
 	pending = status & mask;
-
+	
 	if (pending & ISC_INT_SWRST_COMPLETE) {
 		complete(&isc->complete);
 		isi_writel(isc, ISC_INTEN, ISC_INT_SWRST_COMPLETE);
@@ -762,6 +802,7 @@ static irqreturn_t isc_interrupt(int irq, void *dev_id)
 	}
 
 	spin_unlock(&isc->lock);
+	
 	return ret;
 }
 
@@ -780,7 +821,10 @@ static void isc_enable_clock(struct atmel_isi *isc)
 		isi_writel(isc, ISC_CLKEN, ISC_CLK_MASTER);
 
 	/* keep original clock config */
-	cfg |= ISC_CLKCFG_ICDIV(5) & ISC_CLKCFG_ICDIV_MASK;
+	// AP+SC increase pixel clock sampling from 1 fifth to full frequency
+	// This is required to support halogen2 pixel clock that is higher than halogen 1
+	// Atmel ......., ma ti sembra che una roba cosi' la devi annegare dentro il codice e non esporre a DTB?
+	cfg |= ISC_CLKCFG_ICDIV(1) & ISC_CLKCFG_ICDIV_MASK;
 	cfg |= ISC_CLKCFG_ISP_SEL_HCLOCK;
 
 	isi_writel(isc, ISC_CLKCFG, cfg);
@@ -821,7 +865,7 @@ static int isi_camera_init_videobuf(struct vb2_queue *q,
 	q->drv_priv = icd;
 	q->buf_struct_size = sizeof(struct frame_buffer);
 	q->ops = &isi_video_qops;
-	q->mem_ops = &vb2_dma_contig_memops;
+	q->mem_ops = &vb2_dma_nc_memops;
 	q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
 	q->lock = &ici->host_lock;
 
@@ -1189,7 +1233,7 @@ static int atmel_isi_remove(struct platform_device *pdev)
 					struct atmel_isi, soc_host);
 
 	soc_camera_host_unregister(soc_host);
-	vb2_dma_contig_cleanup_ctx(isi->alloc_ctx);
+	vb2_dma_nc_cleanup_ctx(isi->alloc_ctx);
 	dma_free_coherent(&pdev->dev,
 			sizeof(union fbd) * MAX_BUFFER_NUM,
 			isi->p_fb_descriptors,
@@ -1302,7 +1346,7 @@ static int atmel_isi_probe(struct platform_device *pdev)
 		list_add(&isi->dma_desc[i].list, &isi->dma_desc_head);
 	}
 
-	isi->alloc_ctx = vb2_dma_contig_init_ctx(&pdev->dev);
+	isi->alloc_ctx = vb2_dma_nc_init_ctx(&pdev->dev);
 	if (IS_ERR(isi->alloc_ctx)) {
 		ret = PTR_ERR(isi->alloc_ctx);
 		goto err_alloc_ctx;
@@ -1359,7 +1403,7 @@ err_register_soc_camera_host:
 	pm_runtime_disable(&pdev->dev);
 err_req_irq:
 err_ioremap:
-	vb2_dma_contig_cleanup_ctx(isi->alloc_ctx);
+	vb2_dma_nc_cleanup_ctx(isi->alloc_ctx);
 err_alloc_ctx:
 	dma_free_coherent(&pdev->dev,
 			sizeof(union fbd) * MAX_BUFFER_NUM,
