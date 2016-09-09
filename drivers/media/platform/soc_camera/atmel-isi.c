@@ -756,7 +756,10 @@ static void isc_configure_geometry(struct atmel_isi *isc, u32 width,
 		isi_writel(isc, ISC_CFA_CTRL, 0);
 		isi_writel(isc, ISC_GAM_CTRL, 0);
 		isi_writel(isc, ISC_RLP_CFG, ISC_RLP_CFG_MODE_DAT8);
-		isi_writel(isc, ISC_DCFG, ISC_DCFG_IMODE_PACKED8);
+
+		// AP & SC: set Y channel DMA bursts length to 16-beats
+		isi_writel(isc, ISC_DCFG, ISC_DCFG_YMBSIZE(ISC_DCFG_MBSIZE_BEATS_16) | ISC_DCFG_IMODE_PACKED8);
+
 		break;
 	/* Bayer RGB */
 	case MEDIA_BUS_FMT_SBGGR8_1X8:
@@ -799,6 +802,12 @@ static irqreturn_t isc_interrupt(int irq, void *dev_id)
 		ret = IRQ_HANDLED;
 	} else if (likely(pending & ISC_INT_DMA_DONE)) {
 		ret = atmel_isi_handle_streaming(isc);
+	}
+
+	// SC & AP - Checking for ISC DAOV: DAOV: Data Overflow Interrupt
+	if (status & 0x2000000)
+	{
+		dev_err(isc->soc_host.icd->parent, "Data Overflow Interrupt (ISC_INTSR:%08x)", status);
 	}
 
 	spin_unlock(&isc->lock);
