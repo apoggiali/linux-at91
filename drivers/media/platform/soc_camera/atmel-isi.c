@@ -587,7 +587,6 @@ static void stop_streaming(struct vb2_queue *vq)
 	struct frame_buffer *buf, *node;
 	int ret = 0;
 	struct v4l2_ctrl *ctrl;
-	int32_t val;
 	
 	struct v4l2_subdev *sd = soc_camera_to_subdev(icd);
 	struct v4l2_ctrl_handler *ctrl_handler = sd->ctrl_handler;
@@ -614,33 +613,22 @@ static void stop_streaming(struct vb2_queue *vq)
 	}
 	else
 	{
+		// the control specific of the trigger mode 
 		ctrl = v4l2_ctrl_find(ctrl_handler, 0x00982900);
 	
-		if (ctrl==NULL)
-		{
-			// we are in continuos mode: wait.
-			ret = atmel_isi_wait_status(isi, WAIT_HW_DISABLE);
-			if (ret < 0)
-				dev_err(icd->parent, "Disable ISI timed out\n");
-		}	
-		else
-		{
-			val = (int32_t) v4l2_ctrl_g_ctrl(ctrl);
-
-			if (val==0)
-			{
-				// we are in continuos mode: wait.
-				ret = atmel_isi_wait_status(isi, WAIT_HW_DISABLE);
-				if (ret < 0)
-					dev_err(icd->parent, "Disable ISI timed out\n");
-			}
-			else
-			{
-				// we are in the triggered mode: don't wait!
-				// dev_err(icd->parent, "Triggered mode: don't wait!\n");
-				;
-			}
-		}
+		/* Disable ISI and (if we aren't in triggered mode) wait for it is done */
+        if ((ctrl != NULL) && ((int32_t) v4l2_ctrl_g_ctrl(ctrl) == 1)) 
+        {
+            // we are in the triggered mode: don't wait!
+            // dev_err(icd->parent, "Triggered mode: don't wait!\n");
+        }
+        else
+        {
+            // we are in continuos mode: wait.
+            ret = atmel_isi_wait_status(isi, WAIT_HW_DISABLE);
+            if (ret < 0)
+                dev_err(icd->parent, "Disable ISI timed out\n");
+        }
 	}
 	
 	pm_runtime_put(ici->v4l2_dev.dev);
