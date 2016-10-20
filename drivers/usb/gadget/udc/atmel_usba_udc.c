@@ -529,6 +529,8 @@ usba_ep_enable(struct usb_ep *_ep, const struct usb_endpoint_descriptor *desc)
 	struct usba_udc *udc = ep->udc;
 	unsigned long flags, ept_cfg, maxpacket;
 	unsigned int nr_trans;
+	int i;
+	int index = ep->index;
 
 	DBG(DBG_GADGET, "%s: ep_enable: desc=%p\n", ep->ep.name, desc);
 
@@ -543,92 +545,110 @@ usba_ep_enable(struct usb_ep *_ep, const struct usb_endpoint_descriptor *desc)
 		return -EINVAL;
 	}
 
-	ep->is_isoc = 0;
-	ep->is_in = 0;
-
-	if (maxpacket <= 8)
-		ept_cfg = USBA_BF(EPT_SIZE, USBA_EPT_SIZE_8);
-	else
-		/* LSB is bit 1, not 0 */
-		ept_cfg = USBA_BF(EPT_SIZE, fls(maxpacket - 1) - 3);
-
-	DBG(DBG_HW, "%s: EPT_SIZE = %lu (maxpacket = %lu)\n",
-			ep->ep.name, ept_cfg, maxpacket);
-
-	if (usb_endpoint_dir_in(desc)) {
-		ep->is_in = 1;
-		ept_cfg |= USBA_EPT_DIR_IN;
-	}
-
-	switch (usb_endpoint_type(desc)) {
-	case USB_ENDPOINT_XFER_CONTROL:
-		ept_cfg |= USBA_BF(EPT_TYPE, USBA_EPT_TYPE_CONTROL);
-		ept_cfg |= USBA_BF(BK_NUMBER, USBA_BK_NUMBER_ONE);
-		break;
-	case USB_ENDPOINT_XFER_ISOC:
-		if (!ep->can_isoc) {
-			DBG(DBG_ERR, "ep_enable: %s is not isoc capable\n",
-					ep->ep.name);
-			return -EINVAL;
-		}
-
-		/*
-		 * Bits 11:12 specify number of _additional_
-		 * transactions per microframe.
-		 */
-		nr_trans = ((usb_endpoint_maxp(desc) >> 11) & 3) + 1;
-		if (nr_trans > 3)
-			return -EINVAL;
-
-		ep->is_isoc = 1;
-		ept_cfg |= USBA_BF(EPT_TYPE, USBA_EPT_TYPE_ISO);
-
-		/*
-		 * Do triple-buffering on high-bandwidth iso endpoints.
-		 */
-		if (nr_trans > 1 && ep->nr_banks == 3)
-			ept_cfg |= USBA_BF(BK_NUMBER, USBA_BK_NUMBER_TRIPLE);
-		else
-			ept_cfg |= USBA_BF(BK_NUMBER, USBA_BK_NUMBER_DOUBLE);
-		ept_cfg |= USBA_BF(NB_TRANS, nr_trans);
-		break;
-	case USB_ENDPOINT_XFER_BULK:
-		ept_cfg |= USBA_BF(EPT_TYPE, USBA_EPT_TYPE_BULK);
-		ept_cfg |= USBA_BF(BK_NUMBER, USBA_BK_NUMBER_DOUBLE);
-		break;
-	case USB_ENDPOINT_XFER_INT:
-		ept_cfg |= USBA_BF(EPT_TYPE, USBA_EPT_TYPE_INT);
-		ept_cfg |= USBA_BF(BK_NUMBER, USBA_BK_NUMBER_DOUBLE);
-		break;
-	}
-
 	spin_lock_irqsave(&ep->udc->lock, flags);
 
-	ep->ep.desc = desc;
-	ep->ep.maxpacket = maxpacket;
+	for (i = 1; i < udc->num_ep; i++) {
 
-	usba_ep_writel(ep, CFG, ept_cfg);
-	usba_ep_writel(ep, CTL_ENB, USBA_EPT_ENABLE);
+		ep = &udc->usba_ep[i];
 
-	if (ep->can_dma) {
-		u32 ctrl;
+		if (i != index) {
+			if (ep->is_enabled) {
+				ept_cfg = usba_ep_readl(ep, CFG);
+				usba_ep_writel(ep, CTL_DIS, USBA_EPT_ENABLE);
+				usba_ep_writel(ep, CFG, 0x0);
+				usba_ep_writel(ep, CFG, ept_cfg);
+				usba_ep_writel(ep, CTL_ENB, USBA_EPT_ENABLE);
+			}
 
-		usba_int_enb_set(udc, usba_int_enb_get(udc) |
-				      USBA_BF(EPT_INT, 1 << ep->index) |
-				      USBA_BF(DMA_INT, 1 << ep->index));
-		ctrl = USBA_AUTO_VALID | USBA_INTDIS_DMA;
-		usba_ep_writel(ep, CTL_ENB, ctrl);
-	} else {
-		usba_int_enb_set(udc, usba_int_enb_get(udc) |
-				      USBA_BF(EPT_INT, 1 << ep->index));
+			continue;
+		}
+
+		ep->is_isoc = 0;
+		ep->is_in = 0;
+
+		if (maxpacket <= 8)
+			ept_cfg = USBA_BF(EPT_SIZE, USBA_EPT_SIZE_8);
+		else
+			/* LSB is bit 1, not 0 */
+			ept_cfg = USBA_BF(EPT_SIZE, fls(maxpacket - 1) - 3);
+
+		DBG(DBG_HW, "%s: EPT_SIZE = %lu (maxpacket = %lu)\n",
+				ep->ep.name, ept_cfg, maxpacket);
+
+		if (usb_endpoint_dir_in(desc)) {
+			ep->is_in = 1;
+			ept_cfg |= USBA_EPT_DIR_IN;
+		}
+
+		switch (usb_endpoint_type(desc)) {
+		case USB_ENDPOINT_XFER_CONTROL:
+			ept_cfg |= USBA_BF(EPT_TYPE, USBA_EPT_TYPE_CONTROL);
+			ept_cfg |= USBA_BF(BK_NUMBER, USBA_BK_NUMBER_ONE);
+			break;
+		case USB_ENDPOINT_XFER_ISOC:
+			if (!ep->can_isoc) {
+				DBG(DBG_ERR, "ep_enable: %s is not isoc capable\n",
+						ep->ep.name);
+				return -EINVAL;
+			}
+
+			/*
+			 * Bits 11:12 specify number of _additional_
+			 * transactions per microframe.
+			 */
+			nr_trans = ((usb_endpoint_maxp(desc) >> 11) & 3) + 1;
+			if (nr_trans > 3)
+				return -EINVAL;
+
+			ep->is_isoc = 1;
+			ept_cfg |= USBA_BF(EPT_TYPE, USBA_EPT_TYPE_ISO);
+
+			/*
+			 * Do triple-buffering on high-bandwidth iso endpoints.
+			 */
+			if (nr_trans > 1 && ep->nr_banks == 3)
+				ept_cfg |= USBA_BF(BK_NUMBER, USBA_BK_NUMBER_TRIPLE);
+			else
+				ept_cfg |= USBA_BF(BK_NUMBER, USBA_BK_NUMBER_DOUBLE);
+			ept_cfg |= USBA_BF(NB_TRANS, nr_trans);
+			break;
+		case USB_ENDPOINT_XFER_BULK:
+			ept_cfg |= USBA_BF(EPT_TYPE, USBA_EPT_TYPE_BULK);
+			ept_cfg |= USBA_BF(BK_NUMBER, USBA_BK_NUMBER_DOUBLE);
+			break;
+		case USB_ENDPOINT_XFER_INT:
+			ept_cfg |= USBA_BF(EPT_TYPE, USBA_EPT_TYPE_INT);
+			ept_cfg |= USBA_BF(BK_NUMBER, USBA_BK_NUMBER_DOUBLE);
+			break;
+		}
+
+		ep->ep.desc = desc;
+		ep->ep.maxpacket = maxpacket;
+
+		usba_ep_writel(ep, CFG, ept_cfg);
+		usba_ep_writel(ep, CTL_ENB, USBA_EPT_ENABLE);
+		ep->is_enabled = 1;
+
+		if (ep->can_dma) {
+			u32 ctrl;
+
+			usba_int_enb_set(udc, usba_int_enb_get(udc) |
+					 USBA_BF(EPT_INT, 1 << ep->index) |
+					 USBA_BF(DMA_INT, 1 << ep->index));
+			ctrl = USBA_AUTO_VALID | USBA_INTDIS_DMA;
+			usba_ep_writel(ep, CTL_ENB, ctrl);
+		} else {
+			usba_int_enb_set(udc, usba_int_enb_get(udc) |
+					 USBA_BF(EPT_INT, 1 << ep->index));
+		}
+
+		DBG(DBG_HW, "EPT_CFG%d after init: %#08lx\n", ep->index,
+				(unsigned long)usba_ep_readl(ep, CFG));
+		DBG(DBG_HW, "INT_ENB after init: %#08lx\n",
+				(unsigned long)usba_int_enb_get(udc));
 	}
 
 	spin_unlock_irqrestore(&udc->lock, flags);
-
-	DBG(DBG_HW, "EPT_CFG%d after init: %#08lx\n", ep->index,
-			(unsigned long)usba_ep_readl(ep, CFG));
-	DBG(DBG_HW, "INT_ENB after init: %#08lx\n",
-			(unsigned long)usba_int_enb_get(udc));
 
 	return 0;
 }
@@ -668,6 +688,8 @@ static int usba_ep_disable(struct usb_ep *_ep)
 			      ~USBA_BF(EPT_INT, 1 << ep->index));
 
 	request_complete_list(ep, &req_list, -ESHUTDOWN);
+
+	ep->is_enabled = 0;
 
 	spin_unlock_irqrestore(&udc->lock, flags);
 

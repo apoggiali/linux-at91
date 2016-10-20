@@ -292,6 +292,7 @@ struct usba_ep {
 	unsigned int				can_isoc:1;
 	unsigned int				is_isoc:1;
 	unsigned int				is_in:1;
+	unsigned int				is_enabled:1;
 
 #ifdef CONFIG_USB_GADGET_DEBUG_FS
 	u32					last_dma_status;
