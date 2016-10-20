@@ -126,6 +126,14 @@
 				atmel,nb-banks = <1>;
 			};
 
+			ep1 {
+				reg = <1>;
+				atmel,fifo-size = <1024>;
+				atmel,nb-banks = <3>;
+				atmel,can-dma;
+				atmel,can-isoc;
+			};
+
 			ep2 {
 				reg = <2>;
 				atmel,fifo-size = <1024>;
@@ -142,22 +150,6 @@
 				atmel,can-isoc;
 			};
 
-			ep1  {
-				reg = <1>;
-				atmel,fifo-size = <1024>;
-				atmel,nb-banks = <3>;
-				atmel,can-dma;
-				atmel,can-isoc;
-			};
-
-			ep6 {
-				reg = <6>;
-				atmel,fifo-size = <1024>;
-				atmel,nb-banks = <2>;
-				atmel,can-dma;
-				atmel,can-isoc;
-			};
-
 			ep4 {
 				reg = <4>;
 				atmel,fifo-size = <1024>;
@@ -168,6 +160,14 @@
 
 			ep5 {
 				reg = <5>;
+				atmel,fifo-size = <1024>;
+				atmel,nb-banks = <2>;
+				atmel,can-dma;
+				atmel,can-isoc;
+			};
+
+			ep6 {
+				reg = <6>;
 				atmel,fifo-size = <1024>;
 				atmel,nb-banks = <2>;
 				atmel,can-dma;
