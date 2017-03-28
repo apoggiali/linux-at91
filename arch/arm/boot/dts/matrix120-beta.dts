@@ -214,8 +214,6 @@
 						pinctrl-0 = <&pinctrl_halogen_default>;
 						/*// This is PA5
 						pwdn-gpios = <&pioA 5 GPIO_ACTIVE_HIGH>;*/
-						// This is PA27
-						greenspot-gpios = <&pioA 27 GPIO_ACTIVE_HIGH>;
 						// This is PB11 (32+11=43)
 						sensledout-gpios = <&pioA 43 GPIO_ACTIVE_HIGH>;
 
@@ -501,6 +499,11 @@
 		HMI_ready {
 			label = "HMI_ready";
 			gpios = <&pioA 37 GPIO_ACTIVE_LOW>;
+		};
+		
+		HMI_green_spot {
+			label = "HMI_green_spot";
+			gpios = <&pioA 27 GPIO_ACTIVE_HIGH>;
 		};
 	};
 };
