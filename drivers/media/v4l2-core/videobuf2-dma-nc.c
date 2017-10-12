@@ -62,9 +62,7 @@ vb2_dma_nc_num_users (void *buf_priv)
 static void
 vb2_dma_nc_prepare (void *buf_priv)
 {
-  struct vb2_dma_nc_buf *buf = buf_priv;
-  dma_sync_single_for_device (buf->dev, buf->dma_addr, buf->size,
-			      buf->dma_dir);
+  // ML: no cache write back here!
 }
 
 static void
