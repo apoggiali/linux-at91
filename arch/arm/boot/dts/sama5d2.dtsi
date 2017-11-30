@@ -1182,7 +1182,7 @@
 				assigned-clocks = <&can0_gclk>;
 				assigned-clock-parents = <&utmi>;
 				assigned-clock-rates = <40000000>;
-				bosch,mram-cfg = <0x0 0 0 32 0 0 0 1>;
+				bosch,mram-cfg = <0x0 0 0 32 0 0 1 1>;
 				status = "disabled";
 			};
 
