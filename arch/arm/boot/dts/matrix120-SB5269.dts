@@ -50,7 +50,7 @@
 #include <dt-bindings/pwm/pwm.h>
 
 / {
-	model = "Datalogic Matrix120 beta";
+	model = "Datalogic Matrix120 SB5269";
 	compatible = "datalogic,matrix120-SB5269", "atmel,sama5d2", "atmel,sama5";
 
 	chosen {
@@ -146,9 +146,9 @@
 				status = "okay";
 			};
 			
-			can0: can@f8054000 {
+			can1: can@fc050000 {
 				pinctrl-names = "default";
-				pinctrl-0 = <&pinctrl_can0_default>;
+				pinctrl-0 = <&pinctrl_can1_default>;
 				status = "okay";
 			}; 			
 
@@ -472,7 +472,7 @@
                                         };
 				};
 				
-				pinctrl_can0_default: can0_default {
+				pinctrl_can1_default: can1_default {
 					pinmux = <PIN_PC26__CANTX1>,
 						 <PIN_PC27__CANRX1>;
 					bias-disable;
