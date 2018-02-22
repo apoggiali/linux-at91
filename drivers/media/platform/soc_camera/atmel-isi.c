@@ -405,7 +405,10 @@ static int buffer_prepare(struct vb2_buffer *vb)
 	}
 
 	vb2_set_plane_payload(&buf->vb, 0, size);
-
+	vb2_dma_nc_set_valid_size(vb, 0, size);
+	dev_info(icd->parent, "%s %lu valid data %lu plane\n",
+				__func__, size, vb2_plane_size(vb, 0));
+	
 	if (!buf->p_dma_desc) {
 		if (list_empty(&isi->dma_desc_head)) {
 			dev_err(icd->parent, "Not enough dma descriptors.\n");
@@ -939,6 +942,47 @@ static int try_or_set_fmt(struct soc_camera_device *icd,
 	return ret;
 }
 
+static int isi_camera_set_crop(struct soc_camera_device *icd,
+				  const struct v4l2_crop *a)
+{
+	struct v4l2_subdev *sd = soc_camera_to_subdev(icd);
+	struct v4l2_subdev_format fmt = {
+		.which = V4L2_SUBDEV_FORMAT_ACTIVE,
+	};
+	struct v4l2_mbus_framefmt *mf = &fmt.format;
+	int ret;
+
+	ret = v4l2_subdev_call(sd, video, s_crop, a);
+	if (ret < 0)
+		return ret;
+	
+	/* The capture device might have changed its output  */
+	ret = v4l2_subdev_call(sd, pad, get_fmt, NULL, &fmt);
+	if (ret < 0)
+		return ret;
+
+	icd->user_width		= mf->width;
+	icd->user_height	= mf->height;
+	
+	if (icd->current_fmt == NULL)
+		return ret;
+	
+	ret = soc_mbus_bytes_per_line(mf->width, icd->current_fmt->host_fmt);
+	if (ret < 0)
+		return ret;
+
+	icd->bytesperline = max_t(u32, icd->bytesperline, ret);
+
+	ret = soc_mbus_image_size(icd->current_fmt->host_fmt, icd->bytesperline,
+				  mf->height);
+	if (ret < 0)
+		return ret;
+
+	icd->sizeimage = max_t(u32, icd->sizeimage, ret);
+	
+	return ret;
+}
+
 static int isi_camera_set_fmt(struct soc_camera_device *icd,
 			      struct v4l2_format *f)
 {
@@ -1209,6 +1253,7 @@ static struct soc_camera_host_ops isi_soc_camera_host_ops = {
 	.owner		= THIS_MODULE,
 	.add		= isi_camera_add_device,
 	.remove		= isi_camera_remove_device,
+	.set_crop   = isi_camera_set_crop,
 	.set_fmt	= isi_camera_set_fmt,
 	.try_fmt	= isi_camera_try_fmt,
 	.get_formats	= isi_camera_get_formats,

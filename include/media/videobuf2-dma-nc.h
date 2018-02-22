@@ -33,6 +33,10 @@ vb2_dma_nc_init_ctx (struct device *dev)
 
 void vb2_dma_nc_cleanup_ctx (void *alloc_ctx);
 
+int
+vb2_dma_nc_set_valid_size (struct vb2_buffer *vb, unsigned int plane_no,
+							unsigned long valid_size);
+
 extern const struct vb2_mem_ops vb2_dma_nc_memops;
 
 #endif

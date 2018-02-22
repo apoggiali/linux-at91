@@ -25,6 +25,7 @@ struct vb2_dma_nc_buf
   struct device *dev;
   void *vaddr;
   unsigned long size;
+  unsigned long valid_size;
   dma_addr_t dma_addr;
   struct dma_attrs attrs;
   enum dma_data_direction dma_dir;
@@ -69,7 +70,8 @@ static void
 vb2_dma_nc_finish (void *buf_priv)
 {
   struct vb2_dma_nc_buf *buf = buf_priv;
-  dma_sync_single_for_cpu (buf->dev, buf->dma_addr, buf->size, buf->dma_dir);
+  dma_sync_single_for_cpu (buf->dev, buf->dma_addr, buf->valid_size != 0 ? buf->valid_size : buf->size, buf->dma_dir);
+  buf->valid_size = 0;
 }
 
 /*********************************************/
@@ -127,6 +129,7 @@ vb2_dma_nc_alloc (void *alloc_ctx, unsigned long size,
   /* Prevent the device from being released while the buffer is used */
   buf->dev = get_device (dev);
   buf->size = size;
+  buf->valid_size = 0;
   buf->dma_dir = dma_dir;
 
   buf->handler.refcount = &buf->refcount;
@@ -182,6 +185,26 @@ vb2_dma_nc_mmap (void *buf_priv, struct vm_area_struct *vma)
   return 0;
 }
 
+int 
+vb2_dma_nc_set_valid_size (struct vb2_buffer *vb, unsigned int plane_no,
+							unsigned long valid_size)
+{
+  if (plane_no >= vb->num_planes || !vb->planes[plane_no].mem_priv)
+		return -EINVAL;
+		
+  struct vb2_dma_nc_buf *buf = vb->planes[plane_no].mem_priv;
+  
+  if (valid_size > buf->size)
+    {
+      pr_err ("%s: %ld greater then %ld %d\n", 
+      __func__, valid_size, buf->size);
+      return -EINVAL;
+    }
+
+  buf->valid_size = valid_size;
+	
+  return 0;
+}
 /*********************************************/
 /*       DMA CONTIG exported functions       */
 /*********************************************/
