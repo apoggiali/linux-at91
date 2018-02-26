@@ -406,8 +406,6 @@ static int buffer_prepare(struct vb2_buffer *vb)
 
 	vb2_set_plane_payload(&buf->vb, 0, size);
 	vb2_dma_nc_set_valid_size(vb, 0, size);
-	dev_info(icd->parent, "%s %lu valid data %lu plane\n",
-				__func__, size, vb2_plane_size(vb, 0));
 	
 	if (!buf->p_dma_desc) {
 		if (list_empty(&isi->dma_desc_head)) {
