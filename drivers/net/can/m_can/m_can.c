@@ -20,6 +20,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
+#include <linux/spinlock.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
@@ -360,6 +361,9 @@ struct m_can_priv {
 	/* message ram configuration */
 	void __iomem *mram_base;
 	struct mram_cfg mcfg[MRAM_CFG_NUM];
+	
+	/* Lock for controlling changes to the netif tx queue state */
+	spinlock_t lock;
 };
 
 static inline u32 m_can_read(const struct m_can_priv *priv, enum m_can_reg reg)
@@ -880,6 +884,7 @@ static irqreturn_t m_can_isr(int irq, void *dev_id)
 	struct m_can_priv *priv = netdev_priv(dev);
 	struct net_device_stats *stats = &dev->stats;
 	u32 ir;
+	unsigned long flags;
 
 	ir = m_can_read(priv, M_CAN_IR);
 	if (!ir)
@@ -913,9 +918,11 @@ static irqreturn_t m_can_isr(int irq, void *dev_id)
 			/* New TX FIFO Element arrived */
 			m_can_echo_tx_event(dev);
 			can_led_event(dev, CAN_LED_EVENT_TX);
+			spin_lock_irqsave(&priv->lock, flags);
 			if (netif_queue_stopped(dev) &&
 			    !m_can_tx_fifo_full(priv))
 				netif_wake_queue(dev);
+			spin_unlock_irqrestore(&priv->lock, flags);
 		}
 	}
 
@@ -1235,6 +1242,9 @@ static struct net_device *alloc_m_can_dev(struct platform_device *pdev,
 	priv = netdev_priv(dev);
 	netif_napi_add(dev, &priv->napi, m_can_poll, M_CAN_NAPI_WEIGHT);
 
+	/* init tx queue lock */
+	spin_lock_init(&priv->lock);
+	
 	/* Shared properties of all M_CAN versions */
 	priv->version = m_can_version;
 	priv->dev = dev;
@@ -1372,6 +1382,7 @@ static netdev_tx_t m_can_start_xmit(struct sk_buff *skb,
 	u32 id, cccr, fdflags;
 	int i;
 	int putidx;
+	unsigned long flags;
 
 	if (can_dropped_invalid_skb(dev, skb))
 		return NETDEV_TX_OK;
@@ -1425,13 +1436,16 @@ static netdev_tx_t m_can_start_xmit(struct sk_buff *skb,
 		/* Transmit routine for version >= v3.1.x */
 
 		/* Check if FIFO full */
+		spin_lock_irqsave(&priv->lock, flags);
 		if (m_can_tx_fifo_full(priv)) {
 			/* This shouldn't happen */
 			netif_stop_queue(dev);
 			netdev_warn(dev,
 				    "TX queue active although FIFO is full.");
+			spin_unlock_irqrestore(&priv->lock, flags);
 			return NETDEV_TX_BUSY;
 		}
+		spin_unlock_irqrestore(&priv->lock, flags);
 
 		/* get put index for frame */
 		putidx = ((m_can_read(priv, M_CAN_TXFQS) & TXFQS_TFQPI_MASK)
@@ -1471,9 +1485,11 @@ static netdev_tx_t m_can_start_xmit(struct sk_buff *skb,
 		m_can_write(priv, M_CAN_TXBAR, (1 << putidx));
 
 		/* stop network queue if fifo full */
-			if (m_can_tx_fifo_full(priv) ||
-			    m_can_next_echo_skb_occupied(dev, putidx))
-				netif_stop_queue(dev);
+		spin_lock_irqsave(&priv->lock, flags);
+		if (m_can_tx_fifo_full(priv) ||
+			m_can_next_echo_skb_occupied(dev, putidx))
+			netif_stop_queue(dev);
+		spin_unlock_irqrestore(&priv->lock, flags);
 	}
 
 	return NETDEV_TX_OK;
